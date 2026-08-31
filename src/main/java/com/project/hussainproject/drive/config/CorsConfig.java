@@ -16,10 +16,12 @@ public class CorsConfig {
 
         CorsConfiguration configuration = new CorsConfiguration();
 
-     configuration.setAllowedOrigins(List.of(
-        "http://localhost:5173",
-        "https://drive-frontend.vercel.app"
-));
+    
+
+        configuration.setAllowedOrigins(List.of(
+                "http://localhost:5173",
+                "https://drive-frontend-black.vercel.app"
+        ));
 
         configuration.setAllowedMethods(List.of(
                 "GET",
