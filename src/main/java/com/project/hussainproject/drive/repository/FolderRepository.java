@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Repository
@@ -24,5 +25,11 @@ public interface FolderRepository extends JpaRepository<Folder, UUID> {
 
     List<Folder> findByOwnerAndParentFolderIdAndIsTrashedTrue(User owner, UUID parentId);
 
-    Page<Folder> findByOwnerAndNameContainingIgnoreCaseAndIsTrashedFalse(User owner,String keyword ,Pageable pageable);
+    Page<Folder> findByOwnerAndNameContainingIgnoreCaseAndIsTrashedFalse(User owner, String keyword, Pageable pageable);
+
+    /**
+     * Find a root-level folder by owner + name (used for smart sharing:
+     * find or create the "sender@email.com" folder in the recipient's root).
+     */
+    Optional<Folder> findByOwnerAndNameAndParentFolderIsNull(User owner, String name);
 }
