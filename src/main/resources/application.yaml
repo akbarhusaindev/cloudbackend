@@ -30,6 +30,10 @@ supabase:
     secret-key: ${SUPABASE_SECRET_KEY}
     bucket-name: ${SUPABASE_BUCKET}
 
+groq:
+  api:
+    key: ${GROQ_API_KEY:dummy-groq-key}
+
 gemini:
   api:
     key: ${GEMINI_API_KEY:dummy-key-for-local}

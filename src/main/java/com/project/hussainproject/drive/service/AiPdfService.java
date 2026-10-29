@@ -24,10 +24,10 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Handles AI-powered PDF analysis using:
  *  - Apache PDFBox  → extract text from PDF stored on Supabase S3
- *  - Google Gemini  → summarise or answer questions about the text
+ *  - Groq (Llama 3.3 70B) & Google Gemini → ultra-fast summary and Q&A
  *
- * Extracted text is cached in-memory per file ID to avoid re-downloading
- * the PDF on every request.
+ * Groq is preferred when GROQ_API_KEY is present for high-speed LPU inference,
+ * with automatic fallback to Gemini if needed.
  */
 @Slf4j
 @Service
@@ -38,7 +38,10 @@ public class AiPdfService {
     private final ShareRepository shareRepository;
     private final StorageService storageService;
 
-    @Value("${gemini.api.key}")
+    @Value("${groq.api.key:}")
+    private String groqApiKey;
+
+    @Value("${gemini.api.key:}")
     private String geminiApiKey;
 
     // ── In-memory cache: fileId → extracted PDF text ───────────────────
@@ -47,11 +50,14 @@ public class AiPdfService {
     private static final String[] GEMINI_MODELS = {
             "gemini-3.8-flash",
             "gemini-2.5-flash",
-            "gemini-2.0-flash"
+            "gemini-2.5-pro"
     };
 
     private static final String GEMINI_BASE_URL =
             "https://generativelanguage.googleapis.com/v1beta/models/";
+
+    private static final String GROQ_URL =
+            "https://api.groq.com/openai/v1/chat/completions";
 
     // ── Public API ──────────────────────────────────────────────────────
 
@@ -62,7 +68,7 @@ public class AiPdfService {
         String text = extractText(fileId, user);
         String prompt = "You are a helpful assistant. Summarise the following document in 3–5 clear bullet points. "
                 + "Focus on the key topics, findings, and conclusions.\n\nDocument:\n" + truncate(text);
-        return callGemini(prompt);
+        return callAi(prompt);
     }
 
     /**
@@ -74,7 +80,7 @@ public class AiPdfService {
                 + "If the answer is not in the document, say so clearly.\n\n"
                 + "Document:\n" + truncate(text)
                 + "\n\nQuestion: " + question;
-        return callGemini(prompt);
+        return callAi(prompt);
     }
 
     // ── Private helpers ─────────────────────────────────────────────────
@@ -130,15 +136,80 @@ public class AiPdfService {
     }
 
     /**
-     * Call Google Gemini generateContent REST API.
-     * Uses the 'x-goog-api-key' header (required for newer 'AQ.' API key format)
-     * and tries modern models ('gemini-1.5-flash', 'gemini-2.0-flash').
+     * Unified AI Dispatcher: prefers Groq for instant inference without 503 errors,
+     * with seamless fallback to Gemini.
      */
-    private String callGemini(String prompt) {
-        if (geminiApiKey == null || geminiApiKey.isBlank() || geminiApiKey.contains("dummy")) {
-            throw new IllegalStateException("GEMINI_API_KEY is not configured. Please set GEMINI_API_KEY in your environment or Render settings.");
+    private String callAi(String prompt) {
+        boolean hasGroq = groqApiKey != null && !groqApiKey.isBlank() && !groqApiKey.contains("dummy");
+        boolean hasGemini = geminiApiKey != null && !geminiApiKey.isBlank() && !geminiApiKey.contains("dummy");
+
+        if (hasGroq) {
+            try {
+                return callGroq(prompt);
+            } catch (Exception e) {
+                log.warn("Groq request failed, trying Gemini fallback: {}", e.getMessage());
+                if (hasGemini) {
+                    return callGemini(prompt);
+                }
+                throw e;
+            }
         }
 
+        if (hasGemini) {
+            return callGemini(prompt);
+        }
+
+        throw new IllegalStateException("Neither GROQ_API_KEY nor GEMINI_API_KEY is configured. Please set at least one in your environment or Render settings.");
+    }
+
+    /**
+     * Call Groq Cloud API (Llama 3.3 70B Versatile / Llama 3.1 8B).
+     */
+    private String callGroq(String prompt) {
+        RestTemplate rest = new RestTemplate();
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setBearerAuth(groqApiKey.trim());
+
+        String[] groqModels = {"llama-3.3-70b-versatile", "llama-3.1-8b-instant"};
+        Exception lastEx = null;
+
+        for (String model : groqModels) {
+            Map<String, Object> body = Map.of(
+                    "model", model,
+                    "messages", List.of(
+                            Map.of("role", "system", "content", "You are an intelligent, accurate document analysis assistant. Answer clearly and concisely based on the document text provided."),
+                            Map.of("role", "user", "content", prompt)
+                    ),
+                    "temperature", 0.2
+            );
+
+            HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
+
+            try {
+                ResponseEntity<Map> response = rest.postForEntity(GROQ_URL, request, Map.class);
+                if (response.getBody() != null) {
+                    @SuppressWarnings("unchecked")
+                    List<Map<String, Object>> choices = (List<Map<String, Object>>) response.getBody().get("choices");
+                    if (choices != null && !choices.isEmpty()) {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> message = (Map<String, Object>) choices.get(0).get("message");
+                        return (String) message.get("content");
+                    }
+                }
+            } catch (Exception e) {
+                lastEx = e;
+                log.warn("Groq model {} failed: {}", model, e.getMessage());
+            }
+        }
+
+        throw new RuntimeException("Groq API error: " + (lastEx != null ? lastEx.getMessage() : "Unknown error"), lastEx);
+    }
+
+    /**
+     * Call Google Gemini generateContent REST API with header auth and model failover.
+     */
+    private String callGemini(String prompt) {
         RestTemplate rest = new RestTemplate();
 
         Map<String, Object> body = Map.of(
@@ -158,42 +229,63 @@ public class AiPdfService {
 
         for (String model : GEMINI_MODELS) {
             String url = GEMINI_BASE_URL + model + ":generateContent";
-            try {
-                ResponseEntity<Map> response = rest.postForEntity(url, request, Map.class);
 
-                // Parse: response.candidates[0].content.parts[0].text
-                @SuppressWarnings("unchecked")
-                List<Map<String, Object>> candidates =
-                        (List<Map<String, Object>>) response.getBody().get("candidates");
-                if (candidates == null || candidates.isEmpty()) {
-                    throw new RuntimeException("No response generated by Gemini.");
-                }
-                @SuppressWarnings("unchecked")
-                Map<String, Object> content = (Map<String, Object>) candidates.get(0).get("content");
-                @SuppressWarnings("unchecked")
-                List<Map<String, Object>> parts = (List<Map<String, Object>>) content.get("parts");
-                return (String) parts.get(0).get("text");
+            for (int attempt = 1; attempt <= 2; attempt++) {
+                try {
+                    ResponseEntity<Map> response = rest.postForEntity(url, request, Map.class);
 
-            } catch (org.springframework.web.client.HttpStatusCodeException e) {
-                lastException = e;
-                log.warn("Gemini model {} returned status {}: {}", model, e.getStatusCode(), e.getResponseBodyAsString());
-                // If 404, try next model in GEMINI_MODELS
-                if (e.getStatusCode().value() == 404) {
-                    continue;
+                    // Parse: response.candidates[0].content.parts[0].text
+                    @SuppressWarnings("unchecked")
+                    List<Map<String, Object>> candidates =
+                            (List<Map<String, Object>>) response.getBody().get("candidates");
+                    if (candidates != null && !candidates.isEmpty()) {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> content = (Map<String, Object>) candidates.get(0).get("content");
+                        @SuppressWarnings("unchecked")
+                        List<Map<String, Object>> parts = (List<Map<String, Object>>) content.get("parts");
+                        if (parts != null && !parts.isEmpty()) {
+                            return (String) parts.get(0).get("text");
+                        }
+                    }
+                } catch (org.springframework.web.client.HttpStatusCodeException e) {
+                    lastException = e;
+                    int statusCode = e.getStatusCode().value();
+                    log.warn("Gemini model {} (attempt {}) returned status {}: {}", model, attempt, statusCode, e.getResponseBodyAsString());
+
+                    // If 404 (model not found), switch to next model immediately
+                    if (statusCode == 404) {
+                        break;
+                    }
+
+                    // If 503 (server overloaded) or 429 (rate limit) or 500, back off and retry once
+                    if ((statusCode == 503 || statusCode == 429 || statusCode == 500) && attempt < 2) {
+                        try {
+                            Thread.sleep(1500);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                        }
+                        continue;
+                    }
+
+                    // Otherwise fall back to the next model
+                    break;
+                } catch (Exception e) {
+                    lastException = e;
+                    log.error("Gemini API call failed for model {} (attempt {}): {}", model, attempt, e.getMessage());
+                    break;
                 }
-                throw new RuntimeException("Gemini API error: " + e.getStatusCode() + ". Check your API key or quota.", e);
-            } catch (Exception e) {
-                lastException = e;
-                log.error("Gemini API call failed for model {}: {}", model, e.getMessage());
             }
         }
 
-        throw new RuntimeException("Gemini API call failed: " + (lastException != null ? lastException.getMessage() : "Unknown error"), lastException);
+        String msg = lastException != null ? lastException.getMessage() : "Unknown error";
+        if (msg.contains("503") || msg.contains("SERVICE_UNAVAILABLE")) {
+            throw new RuntimeException("Google Gemini service is temporarily overloaded. Please try asking again in a few moments.");
+        }
+        throw new RuntimeException("Gemini API call failed: " + msg, lastException);
     }
 
     /**
-     * Truncate text to ~28 000 characters to stay within Gemini's context window.
-     * Gemini 1.5 Flash supports ~1M tokens; 28k chars ≈ ~7k tokens — plenty for most PDFs.
+     * Truncate text to ~28 000 characters to stay within context limits.
      */
     private String truncate(String text) {
         int limit = 28_000;
@@ -208,4 +300,3 @@ public class AiPdfService {
         pdfTextCache.remove(fileId);
     }
 }
-

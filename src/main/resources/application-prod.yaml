@@ -30,6 +30,10 @@ supabase:
     secret-key: ${SUPABASE_SECRET_KEY}
     bucket-name: cloud
 
+groq:
+  api:
+    key: ${GROQ_API_KEY:}
+
 gemini:
   api:
     key: ${GEMINI_API_KEY:}
