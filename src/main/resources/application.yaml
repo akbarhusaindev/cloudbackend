@@ -29,4 +29,8 @@ supabase:
     access-key: ${SUPABASE_ACCESS_KEY}
     secret-key: ${SUPABASE_SECRET_KEY}
     bucket-name: ${SUPABASE_BUCKET}
+
+gemini:
+  api:
+    key: ${GEMINI_API_KEY:dummy-key-for-local}
  
