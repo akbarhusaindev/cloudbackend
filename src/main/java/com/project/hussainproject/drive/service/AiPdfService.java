@@ -47,10 +47,15 @@ public class AiPdfService {
     // ── In-memory cache: fileId → extracted PDF text ───────────────────
     private final ConcurrentHashMap<UUID, String> pdfTextCache = new ConcurrentHashMap<>();
 
+    private static final String[] GROQ_MODELS = {
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+            "qwen/qwen3.8-27b"
+    };
+
     private static final String[] GEMINI_MODELS = {
             "gemini-3.8-flash",
-            "gemini-2.5-flash",
-            "gemini-2.5-pro"
+            "gemini-3.1-pro-preview"
     };
 
     private static final String GEMINI_BASE_URL =
@@ -163,7 +168,7 @@ public class AiPdfService {
     }
 
     /**
-     * Call Groq Cloud API (Llama 3.3 70B Versatile / Llama 3.1 8B).
+     * Call Groq Cloud API (openai/gpt-oss-120b / openai/gpt-oss-20b / qwen/qwen3.8-27b).
      */
     private String callGroq(String prompt) {
         RestTemplate rest = new RestTemplate();
@@ -171,10 +176,9 @@ public class AiPdfService {
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setBearerAuth(groqApiKey.trim());
 
-        String[] groqModels = {"llama-3.3-70b-versatile", "llama-3.1-8b-instant"};
         Exception lastEx = null;
 
-        for (String model : groqModels) {
+        for (String model : GROQ_MODELS) {
             Map<String, Object> body = Map.of(
                     "model", model,
                     "messages", List.of(
