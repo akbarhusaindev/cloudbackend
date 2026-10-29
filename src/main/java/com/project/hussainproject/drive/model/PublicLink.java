@@ -11,7 +11,6 @@ import org.hibernate.annotations.CreationTimestamp;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
-
 @Data
 @Builder
 @NoArgsConstructor
@@ -24,13 +23,14 @@ public class PublicLink {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    @Column(nullable = false, unique = true )
+    @Column(nullable = false, unique = true)
     private String token;
 
-    // Use EAGER so we can retrieve details for public download pages without auth session issues
+    // Use EAGER so we can retrieve details for public download pages without auth
+    // session issues
     @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "file_id", nullable = false)
-    @JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "owner", "folder"})
+    @JsonIgnoreProperties({ "hibernateLazyInitializer", "handler", "owner", "folder" })
     private FileMetadata file;
 
     @Enumerated(EnumType.STRING)
