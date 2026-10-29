@@ -45,7 +45,8 @@ public class AiPdfService {
     private final ConcurrentHashMap<UUID, String> pdfTextCache = new ConcurrentHashMap<>();
 
     private static final String[] GEMINI_MODELS = {
-            "gemini-1.5-flash",
+            "gemini-3.8-flash",
+            "gemini-2.5-flash",
             "gemini-2.0-flash"
     };
 
