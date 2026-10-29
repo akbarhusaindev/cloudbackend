@@ -28,5 +28,6 @@ supabase:
     region: ${SUPABASE_REGION}   
     access-key: ${SUPABASE_ACCESS_KEY}
     secret-key: ${SUPABASE_SECRET_KEY}
-    bucket-name: drive-bucket
+    bucket-name: cloud
+    
  
