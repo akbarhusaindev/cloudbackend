@@ -72,7 +72,7 @@ public class AiPdfService {
     public String summarise(UUID fileId, User user) {
         String text = extractText(fileId, user);
         String prompt = "You are a helpful assistant. Summarise the following document in 3–5 clear bullet points. "
-                + "Focus on the key topics, findings, and conclusions.\n\nDocument:\n" + truncate(text);
+                + "Focus on the key topics, findings, and conclusions. Do not use double asterisks (**) or markdown bold formatting in your response; output plain, clean text.\n\nDocument:\n" + truncate(text);
         return callAi(prompt);
     }
 
@@ -82,7 +82,7 @@ public class AiPdfService {
     public String chat(UUID fileId, User user, String question) {
         String text = extractText(fileId, user);
         String prompt = "You are a helpful assistant. Use ONLY the document below to answer the user's question. "
-                + "If the answer is not in the document, say so clearly.\n\n"
+                + "If the answer is not in the document, say so clearly. Do not use double asterisks (**) or markdown bold formatting in your response; output plain, clean text.\n\n"
                 + "Document:\n" + truncate(text)
                 + "\n\nQuestion: " + question;
         return callAi(prompt);
@@ -145,26 +145,38 @@ public class AiPdfService {
      * with seamless fallback to Gemini.
      */
     private String callAi(String prompt) {
+        String rawResult;
         boolean hasGroq = groqApiKey != null && !groqApiKey.isBlank() && !groqApiKey.contains("dummy");
         boolean hasGemini = geminiApiKey != null && !geminiApiKey.isBlank() && !geminiApiKey.contains("dummy");
 
         if (hasGroq) {
             try {
-                return callGroq(prompt);
+                rawResult = callGroq(prompt);
+                return cleanResponse(rawResult);
             } catch (Exception e) {
                 log.warn("Groq request failed, trying Gemini fallback: {}", e.getMessage());
                 if (hasGemini) {
-                    return callGemini(prompt);
+                    rawResult = callGemini(prompt);
+                    return cleanResponse(rawResult);
                 }
                 throw e;
             }
         }
 
         if (hasGemini) {
-            return callGemini(prompt);
+            rawResult = callGemini(prompt);
+            return cleanResponse(rawResult);
         }
 
         throw new IllegalStateException("Neither GROQ_API_KEY nor GEMINI_API_KEY is configured. Please set at least one in your environment or Render settings.");
+    }
+
+    /**
+     * Strips markdown bold asterisks (**) and ensures clean plain text output.
+     */
+    private String cleanResponse(String text) {
+        if (text == null) return "";
+        return text.replace("**", "").trim();
     }
 
     /**
@@ -182,7 +194,7 @@ public class AiPdfService {
             Map<String, Object> body = Map.of(
                     "model", model,
                     "messages", List.of(
-                            Map.of("role", "system", "content", "You are an intelligent, accurate document analysis assistant. Answer clearly and concisely based on the document text provided."),
+                            Map.of("role", "system", "content", "You are an intelligent, accurate document analysis assistant. Answer clearly and concisely based on the document text provided. Do not use double asterisks (**) or markdown bolding in your output; return clean plain text."),
                             Map.of("role", "user", "content", prompt)
                     ),
                     "temperature", 0.2
